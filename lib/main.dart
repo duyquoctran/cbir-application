@@ -1,83 +1,93 @@
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:diff_image/diff_image.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:tflite/tflite.dart';
-import 'fire_storage_service.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 
-void main() => runApp(MaterialApp(
-      home: MyApp(),
-    ));
 
-String image1 = "images/imageflower5.jpg";
-String image2 = "images/imageflower15.jpg";
-String image = image1;
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const MaterialApp(
+    home: MyApp(),
+  ));
+}
+
 
 class MyApp extends StatefulWidget {
+  const MyApp({super.key});
+
   @override
-  _MyAppState createState() => _MyAppState();
+  State<MyApp> createState() => _MyAppState();
 }
 
 class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
-  final Firestore fb = Firestore.instance;
-  List _outputs;
-  File _image;
-  bool _loading = false;
-  var imagetest = "images";
-  var imagequery;
-  var listtest;
-  var listsort;
-  var snapshotdata;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  AnimationController animationController;
-  Animation degOneTranslationAnimation,
-      degTwoTranslationAnimation,
-      degThreeTranslationAnimation;
-  Animation rotationAnimation;
+  List<Map<String, dynamic>>? _outputs;
+  File? _image;
+  bool _loading = false;
+  String _collectionName = "images";
+  img.Image? _queryImage;
+  List<double>? _sortedDiffs;
+  List<int>? _sortedIndices;
+  QuerySnapshot<Map<String, dynamic>>? _snapshotData;
+
+  late final AnimationController _animationController;
+  late final Animation<double> _degOneTranslationAnimation;
+  late final Animation<double> _degTwoTranslationAnimation;
+  late final Animation<double> _degThreeTranslationAnimation;
+  late final Animation<double> _rotationAnimation;
+
+  late Interpreter _interpreter;
+  late List<String> _labels;
 
   double getRadiansFromDegree(double degree) {
-    double unitRadian = 57.295779513;
+    const unitRadian = 57.295779513;
     return degree / unitRadian;
   }
 
   @override
   void initState() {
-    animationController =
-        AnimationController(vsync: this, duration: Duration(milliseconds: 250));
-    degOneTranslationAnimation = TweenSequence([
+    super.initState();
+
+    _animationController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 250));
+    _degOneTranslationAnimation = TweenSequence([
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 0.0, end: 1.2), weight: 75.0),
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 1.2, end: 1.0), weight: 25.0),
-    ]).animate(animationController);
-    degTwoTranslationAnimation = TweenSequence([
+    ]).animate(_animationController);
+    _degTwoTranslationAnimation = TweenSequence([
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 0.0, end: 1.4), weight: 55.0),
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 1.4, end: 1.0), weight: 45.0),
-    ]).animate(animationController);
-    degThreeTranslationAnimation = TweenSequence([
+    ]).animate(_animationController);
+    _degThreeTranslationAnimation = TweenSequence([
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 0.0, end: 1.75), weight: 35.0),
       TweenSequenceItem<double>(
           tween: Tween<double>(begin: 1.75, end: 1.0), weight: 65.0),
-    ]).animate(animationController);
-    rotationAnimation = Tween<double>(begin: 180.0, end: 0.0).animate(
-        CurvedAnimation(parent: animationController, curve: Curves.easeOut));
+    ]).animate(_animationController);
+    _rotationAnimation = Tween<double>(begin: 180.0, end: 0.0).animate(
+        CurvedAnimation(parent: _animationController, curve: Curves.easeOut));
 
-    super.initState();
-
-    animationController.addListener(() {
+    _animationController.addListener(() {
       setState(() {});
     });
 
     _loading = true;
-    loadModel().then((value) {
+    loadModel().then((_) {
+      if (!mounted) return;
       setState(() {
         _loading = false;
       });
@@ -91,184 +101,106 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
           title: const Text('CBIR PROJECT'),
         ),
         body: _loading
-            ? Container(
-                alignment: Alignment.center,
-                child: CircularProgressIndicator(),
-              )
+            ? const Center(child: CircularProgressIndicator())
             : Container(
-                // width: MediaQuery.of(context).size.width,
                 alignment: Alignment.center,
                 height: MediaQuery.of(context).size.height / 1.0,
                 width: MediaQuery.of(context).size.width,
                 child: ListView(children: [
-                  SizedBox(
+                  const SizedBox(
                     height: 100,
                   ),
-                  //
-                  //Ảnh input từ device
                   _image == null
                       ? Container()
                       : Image.file(
-                          _image,
+                          _image!,
                           height: 200,
                         ),
-                  //
-                  SizedBox(
+                  const SizedBox(
                     height: 20,
                   ),
-                  // Text sau khi classify
                   _outputs != null
                       ? Center(
                           child: Text(
-                          // "${'index:' + _outputs[0]["index"].toString() + ' ' + 'label:' + _outputs[0]["label"] + ' ' + '(' + (_outputs[0]["confidence"] * 100).toStringAsFixed(0) + '%)'}",
-                          "${'Flower type:' + ' ' + _outputs[0]["label"] + ' ' + '(' + (_outputs[0]["confidence"] * 100).toStringAsFixed(0) + '%)'}",
-                          style: TextStyle(
+                          "${'Flower type:' + ' ' + _outputs![0]["label"] + ' ' + '(' + (_outputs![0]["confidence"] * 100).toStringAsFixed(0) + '%)'}",
+                          style: const TextStyle(
                             color: Colors.black,
                             fontSize: 20.0,
-                            // background: Paint()
-                            //   ..color = Colors.white,
                           ),
                         ))
                       : Container(),
-                  //
-                  SizedBox(
+                  const SizedBox(
                     height: 20,
                   ),
-
-                  // Dòng "Results"
-                  _outputs != null ? textSection1 : Container(),
-
-                  // Lấy tất cả các ảnh store từ Cloud Firestore
-                  FutureBuilder(
+                  _outputs != null ? _textSection : Container(),
+                  FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     future: getImages(),
-                    builder: (context, AsyncSnapshot<QuerySnapshot> snapshot) {
-                      if (snapshot.connectionState == ConnectionState.done) {
-                        snapshotdata = snapshot;
-                        return ListView.builder(
-                            physics: ScrollPhysics(),
-                            shrinkWrap: true,
-                            itemCount: snapshot.data.documents.length,
-                            itemBuilder: (BuildContext context, int index) {
-                              return Card(
-                                  color: Colors.grey[100],
-                                  semanticContainer: true,
-                                  // clipBehavior: Clip.antiAliasWithSaveLayer,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(15.0),
-                                  ),
-                                  elevation: 5,
-                                  margin: EdgeInsets.all(10),
-                                  child: ListTile(
-                                    contentPadding: EdgeInsets.all(25.0),
-                                    //Image
-                                    leading: listsort != null
-                                        ? Image.network(
-                                            snapshot
-                                                .data
-                                                .documents[listsort[index]]
-                                                .data["url"],
-                                            fit: BoxFit.fill)
-                                        : Image.network(
-                                            snapshot.data.documents[index]
-                                                .data["url"],
-                                            fit: BoxFit.fill),
-                                    //Name of image
-                                    title: listsort != null
-                                        ? Text(
-                                            snapshot
-                                                .data
-                                                .documents[listsort[index]]
-                                                .data["name"],
-                                            style: TextStyle(
-                                              color: Colors.black,
-                                              fontSize: 20.0,
-                                            ),
-                                          )
-                                        : Text(
-                                            snapshot.data.documents[index]
-                                                .data["name"],
-                                            style: TextStyle(
-                                              color: Colors.black,
-                                              fontSize: 20.0,
-                                            ),
-                                          ),
-                                    //% Diff of image
-                                    subtitle: listtest != null
-                                        ? Text(
-                                            '${'Similiarity: ' + (100 - listtest[index]).toStringAsFixed(1) + '%'}',
-                                            style: TextStyle(
-                                              color: Colors.black,
-                                              fontSize: 20.0,
-                                            ),
-                                          )
-                                        : Container(),
-
-                                    // trailing: Icon(Icons.sort),
-
-                                    // onTap: () async {
-                                    //   //Notification
-                                    //   final snackBar = SnackBar(
-                                    //       content: Text('Wait a minute !!!'));
-                                    //   Scaffold.of(context)
-                                    //       .showSnackBar(snackBar);
-                                    //   //Hàm so sánh vô đây
-                                    //   //test
-                                    //   processimage();
-                                    //   sorting();
-                                    // },
-                                  ));
-                            });
-                      } else if (snapshot.connectionState ==
-                          ConnectionState.none) {
-                        return Text("No data");
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
                       }
-                      return Container();
+
+                      if (!snapshot.hasData) {
+                        return const Text("No data");
+                      }
+
+                      _snapshotData = snapshot.data;
+                      final docs = snapshot.data!.docs;
+
+                      return ListView.builder(
+                          physics: const ScrollPhysics(),
+                          shrinkWrap: true,
+                          itemCount: docs.length,
+                          itemBuilder: (BuildContext context, int index) {
+                            final docIndex = _sortedIndices != null
+                                ? _sortedIndices![index]
+                                : index;
+                            final data = docs[docIndex].data();
+                            final imageUrl = data["url"] as String?;
+                            final name = data["name"] as String?;
+                            final similarity = (_sortedDiffs != null &&
+                                    index < _sortedDiffs!.length)
+                                ? (100 - _sortedDiffs![index])
+                                : null;
+
+                            return Card(
+                                color: Colors.grey[100],
+                                semanticContainer: true,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(15.0),
+                                ),
+                                elevation: 5,
+                                margin: const EdgeInsets.all(10),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.all(25.0),
+                                  leading: imageUrl == null
+                                      ? const SizedBox.shrink()
+                                      : Image.network(imageUrl,
+                                          fit: BoxFit.fill),
+                                  title: Text(
+                                    name ?? "Unknown",
+                                    style: const TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 20.0,
+                                    ),
+                                  ),
+                                  subtitle: similarity != null
+                                      ? Text(
+                                          'Similarity: ${similarity.toStringAsFixed(1)}%',
+                                          style: const TextStyle(
+                                            color: Colors.black,
+                                            fontSize: 20.0,
+                                          ),
+                                        )
+                                      : Container(),
+                                ));
+                          });
                     },
                   ),
-
-                  // // Lấy ảnh từ FB Storage
-                  // FutureBuilder(
-                  //   future: _getImage(context, image),
-                  //   builder: (context, snapshot) {
-                  //     if (snapshot.connectionState == ConnectionState.done)
-                  //       return Container(
-                  //         height: MediaQuery.of(context).size.height / 3.0,
-                  //         width: MediaQuery.of(context).size.width / 2.0,
-                  //         child: snapshot.data,
-                  //       );
-
-                  //     if (snapshot.connectionState == ConnectionState.waiting)
-                  //       return Container(
-                  //           height: MediaQuery.of(context).size.height / 3.0,
-                  //           width: MediaQuery.of(context).size.width / 3.0,
-                  //           child: CircularProgressIndicator());
-
-                  //     return Container();
-                  //   },
-                  // ),
-
-                  // Center(
-                  //   child: loadButton(context),
-                  // ),
-
-                  // _outputs != null
-                  //     ? Center(
-                  //         child: Text(
-                  //         "${'index:' + _outputs[0]["index"].toString() + ' ' + 'label:' + _outputs[0]["label"] + ' ' + '(' + (_outputs[0]["confidence"] * 100).toStringAsFixed(0) + '%)'}",
-                  //         style: TextStyle(
-                  //           color: Colors.black,
-                  //           fontSize: 20.0,
-                  //           background: Paint()..color = Colors.white,
-                  //         ),
-                  //       ))
-                  //     : Container(),
-
-                  // floatingActionButton: FloatingActionButton(
-                  //   onPressed: pickImage,
-                  //   child: Icon(Icons.image),
-                  // ),
                 ])),
-        floatingActionButton: Container(
+        floatingActionButton: SizedBox(
             width: MediaQuery.of(context).size.width,
             height: MediaQuery.of(context).size.height,
             child: Stack(children: <Widget>[
@@ -280,25 +212,24 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                     children: <Widget>[
                       IgnorePointer(
                         child: Container(
-                          color: Colors.black.withOpacity(
-                              0.0), // comment or change to transparent color
+                          color: Colors.black.withOpacity(0.0),
                           height: 150.0,
                           width: 150.0,
                         ),
                       ),
                       Transform.translate(
                         offset: Offset.fromDirection(getRadiansFromDegree(270),
-                            degOneTranslationAnimation.value * 100),
+                            _degOneTranslationAnimation.value * 100),
                         child: Transform(
                           transform: Matrix4.rotationZ(
-                              getRadiansFromDegree(rotationAnimation.value))
-                            ..scale(degOneTranslationAnimation.value),
+                              getRadiansFromDegree(_rotationAnimation.value))
+                            ..scale(_degOneTranslationAnimation.value),
                           alignment: Alignment.center,
                           child: CircularButton(
                             color: Colors.blue,
                             width: 50,
                             height: 50,
-                            icon: Icon(
+                            icon: const Icon(
                               Icons.add_a_photo,
                               color: Colors.white,
                             ),
@@ -308,17 +239,17 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                       ),
                       Transform.translate(
                         offset: Offset.fromDirection(getRadiansFromDegree(225),
-                            degTwoTranslationAnimation.value * 100),
+                            _degTwoTranslationAnimation.value * 100),
                         child: Transform(
                           transform: Matrix4.rotationZ(
-                              getRadiansFromDegree(rotationAnimation.value))
-                            ..scale(degTwoTranslationAnimation.value),
+                              getRadiansFromDegree(_rotationAnimation.value))
+                            ..scale(_degTwoTranslationAnimation.value),
                           alignment: Alignment.center,
                           child: CircularButton(
                             color: Colors.black,
                             width: 50,
                             height: 50,
-                            icon: Icon(
+                            icon: const Icon(
                               Icons.camera_alt,
                               color: Colors.white,
                             ),
@@ -331,34 +262,30 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                               builder: (context) => Transform.translate(
                                     offset: Offset.fromDirection(
                                         getRadiansFromDegree(180),
-                                        degThreeTranslationAnimation.value *
+                                        _degThreeTranslationAnimation.value *
                                             100),
                                     child: Transform(
                                       transform: Matrix4.rotationZ(
                                           getRadiansFromDegree(
-                                              rotationAnimation.value))
+                                              _rotationAnimation.value))
                                         ..scale(
-                                            degThreeTranslationAnimation.value),
+                                            _degThreeTranslationAnimation.value),
                                       alignment: Alignment.center,
                                       child: CircularButton(
                                         color: Colors.purpleAccent,
                                         width: 50,
                                         height: 50,
-                                        icon: Icon(
+                                        icon: const Icon(
                                           Icons.sort,
                                           color: Colors.white,
                                         ),
                                         onClick: () async {
-                                          //Notification
                                           final snackBar = SnackBar(
                                               content:
                                                   Text('Wait a minute !!!'));
-                                          Scaffold.of(context)
+                                          ScaffoldMessenger.of(context)
                                               .showSnackBar(snackBar);
-                                          //Hàm so sánh vô đây
-                                          //test
-                                          processimage();
-                                          sorting();
+                                          await _computeSimilarities();
                                         },
                                       ),
                                     ),
@@ -366,21 +293,21 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                           : Container(),
                       Transform(
                         transform: Matrix4.rotationZ(
-                            getRadiansFromDegree(rotationAnimation.value)),
+                            getRadiansFromDegree(_rotationAnimation.value)),
                         alignment: Alignment.center,
                         child: CircularButton(
                           color: Colors.blue,
                           width: 60,
                           height: 60,
-                          icon: Icon(
+                          icon: const Icon(
                             Icons.menu,
                             color: Colors.white,
                           ),
                           onClick: () {
-                            if (animationController.isCompleted) {
-                              animationController.reverse();
+                            if (_animationController.isCompleted) {
+                              _animationController.reverse();
                             } else {
-                              animationController.forward();
+                              _animationController.forward();
                             }
                           },
                         ),
@@ -390,61 +317,66 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
             ])));
   }
 
-  //Hàm xử lí sắp xếp
-  //test
-  Future<Void> processimage() async {
-    var listdiff = new List(snapshotdata.data.documents.length);
-    for (var i = 0; i < snapshotdata.data.documents.length; i++) {
-      var response = await http.get(snapshotdata.data.documents[i].data["url"]);
-      var image2 = img.decodeImage(response.bodyBytes);
-      image2 = img.copyResize(image2, width: 300, height: 300);
-      listdiff[i] = await DiffImage.compare(imagequery, image2);
-    }
-    //After sorting
-    var sorted = listdiff.toList();
-    sorted.sort((a, b) => a.compareTo(b));
-    var lists = new List();
-    for (var j = 0; j < sorted.length; j++) {
-      for (var k = 0; k < listdiff.length; k++) {
-        if (listdiff[k] == sorted[j]) {
-          var tempsnap = snapshotdata.data.documents[j];
-          snapshotdata.data.documents[j] = snapshotdata.data.documents[k];
-          snapshotdata.data.documents[k] = tempsnap;
-          lists.add(k);
-          break;
-        }
+  double _calculateDifference(img.Image a, img.Image b) {
+    final width = min(a.width, b.width);
+    final height = min(a.height, b.height);
+    double diff = 0;
+
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
+        final pixelA = a.getPixel(x, y);
+        final pixelB = b.getPixel(x, y);
+        diff += (img.getRed(pixelA) - img.getRed(pixelB)).abs();
+        diff += (img.getGreen(pixelA) - img.getGreen(pixelB)).abs();
+        diff += (img.getBlue(pixelA) - img.getBlue(pixelB)).abs();
       }
     }
-    setState(() {
-      listsort = lists;
-    });
+
+    final maxDiff = width * height * 3 * 255;
+    return (diff / maxDiff) * 100;
   }
 
-  //test
-  Future<Void> sorting() async {
-    var listdiff = new List(snapshotdata.data.documents.length);
-    for (var i = 0; i < snapshotdata.data.documents.length; i++) {
-      var response = await http.get(snapshotdata.data.documents[i].data["url"]);
-      var image2 = img.decodeImage(response.bodyBytes);
-      image2 = img.copyResize(image2, width: 300, height: 300);
-      listdiff[i] = await DiffImage.compare(imagequery, image2);
+  Future<void> _computeSimilarities() async {
+    final docs = _snapshotData?.docs;
+    final query = _queryImage;
+    if (docs == null || query == null) return;
+
+    final diffs = <double>[];
+
+    for (var i = 0; i < docs.length; i++) {
+      final url = docs[i].data()["url"] as String?;
+      if (url == null) {
+        diffs.add(100);
+        continue;
+      }
+      final response = await http.get(Uri.parse(url));
+      final image2 = img.decodeImage(response.bodyBytes);
+      if (image2 == null) {
+        diffs.add(100);
+        continue;
+      }
+      final resized = img.copyResize(image2, width: 300, height: 300);
+      diffs.add(_calculateDifference(query, resized));
     }
 
+    final indices = List<int>.generate(diffs.length, (i) => i)
+      ..sort((a, b) => diffs[a].compareTo(diffs[b]));
+    final sortedDiffs = [for (final i in indices) diffs[i]];
+
+    if (!mounted) return;
     setState(() {
-      listdiff.sort((a, b) => a.compareTo(b));
-      listtest = listdiff;
+      _sortedIndices = indices;
+      _sortedDiffs = sortedDiffs;
     });
   }
 
-  //Hàm lấy ảnh từ Cloud Firestore
-  Future<QuerySnapshot> getImages() {
-    return fb.collection(imagetest).getDocuments();
+  Future<QuerySnapshot<Map<String, dynamic>>> getImages() {
+    return _firestore.collection(_collectionName).get();
   }
 
-  //"Results" text
-  Widget textSection1 = Container(
+  final Widget _textSection = Container(
       padding: const EdgeInsets.all(32),
-      child: Center(
+      child: const Center(
         child: Text(
           'Results',
           softWrap: true,
@@ -452,170 +384,125 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
         ),
       ));
 
-  //Hàm classify ảnh
-  classifyImage(File image) async {
-    var output = await Tflite.runModelOnImage(
-      path: image.path,
-      numResults: 1,
-      threshold: 0.1,
-      imageMean: 127.5,
-      imageStd: 127.5,
-    );
+  Future<void> classifyImage(File image) async {
+    final bytes = await image.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return;
+
+    final inputTensor = _interpreter.getInputTensor(0);
+    final inputShape = inputTensor.shape;
+    final inputHeight = inputShape[1];
+    final inputWidth = inputShape[2];
+
+    final resized = img.copyResize(decoded,
+        width: inputWidth, height: inputHeight);
+
+    final inputSize = inputHeight * inputWidth * 3;
+    final input = Float32List(inputSize);
+    var index = 0;
+
+    for (var y = 0; y < inputHeight; y++) {
+      for (var x = 0; x < inputWidth; x++) {
+        final pixel = resized.getPixel(x, y);
+        input[index++] = (img.getRed(pixel) - 127.5) / 127.5;
+        input[index++] = (img.getGreen(pixel) - 127.5) / 127.5;
+        input[index++] = (img.getBlue(pixel) - 127.5) / 127.5;
+      }
+    }
+
+    final outputTensor = _interpreter.getOutputTensor(0);
+    final outputShape = outputTensor.shape;
+    final outputSize = outputShape.reduce((a, b) => a * b);
+    final output = List.filled(outputSize, 0.0).reshape(outputShape);
+
+    _interpreter.run(input.reshape([1, inputHeight, inputWidth, 3]), output);
+
+    final scores = (output[0] as List).cast<double>();
+    var topIndex = 0;
+    var topScore = scores.isNotEmpty ? scores[0] : 0.0;
+
+    for (var i = 1; i < scores.length; i++) {
+      if (scores[i] > topScore) {
+        topScore = scores[i];
+        topIndex = i;
+      }
+    }
+
+    final label = (topIndex < _labels.length)
+        ? _labels[topIndex]
+        : 'unknown';
+
+    if (!mounted) return;
     setState(() {
       _loading = false;
-      _outputs = output;
-      imagetest = _outputs[0]["label"];
+      _outputs = [
+        {
+          "label": label,
+          "confidence": topScore,
+        }
+      ];
+      _collectionName = label;
     });
   }
 
-  //Take a picture
-  takeImage() async {
-    var image = await ImagePicker.pickImage(source: ImageSource.camera);
-    if (image == null) return null;
+  Future<void> takeImage() async {
+    final picked =
+        await ImagePicker().pickImage(source: ImageSource.camera);
+    if (picked == null) return;
+
+    final image = File(picked.path);
     setState(() {
       _loading = true;
       _image = image;
     });
-    classifyImage(image);
-    imagequery = img.copyResize(img.decodeImage(image.readAsBytesSync()),
-        width: 300, height: 300);
-    listtest = null;
-    listsort = null;
+
+    await classifyImage(image);
+
+    final decoded = img.decodeImage(await image.readAsBytes());
+    if (decoded != null) {
+      _queryImage = img.copyResize(decoded, width: 300, height: 300);
+    }
+    _sortedDiffs = null;
+    _sortedIndices = null;
   }
 
-  //Pick ảnh từ device
-  pickImage() async {
-    var image = await ImagePicker.pickImage(source: ImageSource.gallery);
-    if (image == null) return null;
+  Future<void> pickImage() async {
+    final picked =
+        await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
+
+    final image = File(picked.path);
     setState(() {
       _loading = true;
       _image = image;
     });
-    classifyImage(image);
-    imagequery = img.copyResize(img.decodeImage(image.readAsBytesSync()),
-        width: 300, height: 300);
-    listtest = null;
-    listsort = null;
+
+    await classifyImage(image);
+
+    final decoded = img.decodeImage(await image.readAsBytes());
+    if (decoded != null) {
+      _queryImage = img.copyResize(decoded, width: 300, height: 300);
+    }
+    _sortedDiffs = null;
+    _sortedIndices = null;
   }
 
-  loadModel() async {
-    await Tflite.loadModel(
-      model: "assets/b1_aug.tflite",
-      labels: "assets/labels.txt",
-    );
+  Future<void> loadModel() async {
+    _interpreter = await Interpreter.fromAsset('b1_aug.tflite');
+    final labelsData = await rootBundle.loadString('assets/labels.txt');
+    _labels = labelsData
+        .split('\n')
+        .map((label) => label.trim())
+        .where((label) => label.isNotEmpty)
+        .toList();
   }
 
   @override
   void dispose() {
-    Tflite.close();
+    _interpreter.close();
+    _animationController.dispose();
     super.dispose();
   }
-
-  //test
-  //   Future<File> urlToFile(String imageUrl) async {
-  // // generate random number.
-  //     var rng = new Random();
-  // // get temporary directory of device.
-  //     Directory tempDir = await getTemporaryDirectory();
-  // // get temporary path from temporary directory.
-  //     String tempPath = tempDir.path;
-  // // create a new file in temporary path with random file name.
-  //     File file = new File('$tempPath' + (rng.nextInt(100)).toString() + '.png');
-  // // call http.get method and pass imageUrl into it to get response.
-  //     http.Response response = await http.get(imageUrl);
-  // // write bodyBytes received in response to file.
-  //     await file.writeAsBytes(response.bodyBytes);
-  // // now return the file which is created with random name in
-  // // temporary directory and image bytes from response is written to // that file.
-  //     // return file;
-  //     // classifyImage(file);
-  //   }
-
-  // Lấy ảnh từ FB Storage
-  // Future<Widget> _getImage(BuildContext context, String image) async {
-  //   Image m;
-
-  //   await FireStorageService.loadFromStorage(context, image)
-  //       .then((downloadUrl) async {
-  //     //Chuyển để classify ảnh trên mạng
-  //     // urlToFile(downloadUrl);
-  //     // Diff test 2 ảnh
-  //     // var difftest = await DiffImage.compareFromUrl(FIRST_IMAGE, downloadUrl);
-  //     // print('The difference between images is: $difftest percent');
-  //     m = Image.network(
-  //       downloadUrl.toString(),
-  //       fit: BoxFit.scaleDown,
-  //     );
-  //     // setState(() {
-  //     //   _diff = difftest;
-  //     // });
-  //   });
-  //   return m;
-  // }
-
-  //Nút random ảnh từ FB Storage "RANDOM IMAGE"
-  // Widget loadButton(BuildContext context) {
-  //   return Container(
-  //     child: Stack(
-  //       children: <Widget>[
-  //         Container(
-  //           padding:
-  //               const EdgeInsets.symmetric(vertical: 5.0, horizontal: 16.0),
-  //           margin: const EdgeInsets.only(
-  //               top: 30, left: 20.0, right: 20.0, bottom: 20.0),
-  //           decoration: BoxDecoration(
-  //               gradient: LinearGradient(
-  //                 colors: [Colors.lightBlue, Colors.lightBlueAccent],
-  //               ),
-  //               borderRadius: BorderRadius.circular(30.0)),
-  //           child: FlatButton(
-  //             onPressed: () {
-  //               //fetch another image
-  //               setState(() {
-  //                 final _random = new Random();
-  //                 var imageList = [image1, image2];
-  //                 image = imageList[_random.nextInt(imageList.length)];
-  //               });
-  //             },
-  //             child: Text(
-  //               "RANDOM IMAGE",
-  //               style: TextStyle(fontSize: 20),
-  //             ),
-  //           ),
-  //         ),
-  //       ],
-  //     ),
-  //   );
-  // }
-
-  // Widget buttonSection1 = Container(
-  //   child: Row(
-  //     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-  //     children: [
-  //       /*_buildButtonColumn(color, Icons.call, 'CALL'),
-  //         _buildButtonColumn(color, Icons.near_me, 'ROUTE'),
-  //         _buildButtonColumn(color, Icons.share, 'SHARE'),*/
-  //       Image.asset(
-  //         'assets/images/lake.jpg',
-  //         width: 120,
-  //         height: 150,
-  //         fit: BoxFit.fitWidth,
-  //       ),
-  //       Image.asset(
-  //         'assets/images/lake.jpg',
-  //         width: 120,
-  //         height: 150,
-  //         fit: BoxFit.fitWidth,
-  //       ),
-  //       Image.asset(
-  //         'assets/images/lake.jpg',
-  //         width: 120,
-  //         height: 150,
-  //         fit: BoxFit.fitWidth,
-  //       ),
-  //     ],
-  //   ),
-  // );
 }
 
 class CircularButton extends StatelessWidget {
@@ -623,10 +510,15 @@ class CircularButton extends StatelessWidget {
   final double height;
   final Color color;
   final Icon icon;
-  final Function onClick;
+  final VoidCallback onClick;
 
-  CircularButton(
-      {this.color, this.width, this.height, this.icon, this.onClick});
+  const CircularButton(
+      {super.key,
+      required this.color,
+      required this.width,
+      required this.height,
+      required this.icon,
+      required this.onClick});
 
   @override
   Widget build(BuildContext context) {
@@ -638,3 +530,4 @@ class CircularButton extends StatelessWidget {
     );
   }
 }
+
