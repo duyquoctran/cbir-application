@@ -1,15 +1,49 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'dart:collection';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
+
+double _diffFromBytes(Map<String, dynamic> args) {
+  final queryBytes = args["query"] as Uint8List?;
+  final targetBytes = args["target"] as Uint8List?;
+  final size = args["size"] as int? ?? 300;
+
+  if (queryBytes == null || targetBytes == null) return 100;
+
+  final queryImage = img.decodeImage(queryBytes);
+  final targetImage = img.decodeImage(targetBytes);
+  if (queryImage == null || targetImage == null) return 100;
+
+  final queryResized = img.copyResize(queryImage, width: size, height: size);
+  final targetResized = img.copyResize(targetImage, width: size, height: size);
+
+  final width = min(queryResized.width, targetResized.width);
+  final height = min(queryResized.height, targetResized.height);
+  double diff = 0;
+
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      final pixelA = queryResized.getPixel(x, y);
+      final pixelB = targetResized.getPixel(x, y);
+      diff += (img.getRed(pixelA) - img.getRed(pixelB)).abs();
+      diff += (img.getGreen(pixelA) - img.getGreen(pixelB)).abs();
+      diff += (img.getBlue(pixelA) - img.getBlue(pixelB)).abs();
+    }
+  }
+
+  final maxDiff = width * height * 3 * 255;
+  return (diff / maxDiff) * 100;
+}
 
 
 Future<void> main() async {
@@ -35,10 +69,14 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
   File? _image;
   bool _loading = false;
   String _collectionName = "images";
-  img.Image? _queryImage;
+  Uint8List? _queryBytes;
   List<double>? _sortedDiffs;
   List<int>? _sortedIndices;
   QuerySnapshot<Map<String, dynamic>>? _snapshotData;
+  bool _isSorting = false;
+  double _sortProgress = 0.0;
+  final LinkedHashMap<String, Uint8List> _imageCache = LinkedHashMap();
+  static const int _imageCacheLimit = 30;
 
   late final AnimationController _animationController;
   late final Animation<double> _degOneTranslationAnimation;
@@ -133,6 +171,14 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                     height: 20,
                   ),
                   _outputs != null ? _textSection : Container(),
+                  _isSorting
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: LinearProgressIndicator(
+                            value: _sortProgress,
+                          ),
+                        )
+                      : Container(),
                   FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     future: getImages(),
                     builder: (context, snapshot) {
@@ -280,6 +326,7 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                                           color: Colors.white,
                                         ),
                                         onClick: () async {
+                                          if (_isSorting) return;
                                           final snackBar = SnackBar(
                                               content:
                                                   Text('Wait a minute !!!'));
@@ -317,47 +364,54 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
             ])));
   }
 
-  double _calculateDifference(img.Image a, img.Image b) {
-    final width = min(a.width, b.width);
-    final height = min(a.height, b.height);
-    double diff = 0;
-
-    for (var y = 0; y < height; y++) {
-      for (var x = 0; x < width; x++) {
-        final pixelA = a.getPixel(x, y);
-        final pixelB = b.getPixel(x, y);
-        diff += (img.getRed(pixelA) - img.getRed(pixelB)).abs();
-        diff += (img.getGreen(pixelA) - img.getGreen(pixelB)).abs();
-        diff += (img.getBlue(pixelA) - img.getBlue(pixelB)).abs();
-      }
-    }
-
-    final maxDiff = width * height * 3 * 255;
-    return (diff / maxDiff) * 100;
-  }
-
   Future<void> _computeSimilarities() async {
     final docs = _snapshotData?.docs;
-    final query = _queryImage;
-    if (docs == null || query == null) return;
+    final queryBytes = _queryBytes;
+    if (docs == null || queryBytes == null) return;
 
-    final diffs = <double>[];
+    setState(() {
+      _isSorting = true;
+      _sortProgress = 0.0;
+    });
 
-    for (var i = 0; i < docs.length; i++) {
-      final url = docs[i].data()["url"] as String?;
-      if (url == null) {
-        diffs.add(100);
-        continue;
+    final diffs = List<double>.filled(docs.length, 100);
+    final queue = List<int>.generate(docs.length, (i) => i);
+    final concurrency = docs.length < 3 ? docs.length : 3;
+    var completed = 0;
+
+    Future<void> worker() async {
+      while (queue.isNotEmpty) {
+        final i = queue.removeLast();
+        final url = docs[i].data()["url"] as String?;
+        if (url == null) {
+          diffs[i] = 100;
+        } else {
+          try {
+            final bytes = await _getImageBytes(url);
+            if (bytes == null) {
+              diffs[i] = 100;
+            } else {
+              final diff = await compute(_diffFromBytes, {
+                "query": queryBytes,
+                "target": bytes,
+                "size": 300,
+              });
+              diffs[i] = diff;
+            }
+          } catch (_) {
+            diffs[i] = 100;
+          }
+        }
+
+        completed++;
+        if (!mounted) return;
+        setState(() {
+          _sortProgress = completed / docs.length;
+        });
       }
-      final response = await http.get(Uri.parse(url));
-      final image2 = img.decodeImage(response.bodyBytes);
-      if (image2 == null) {
-        diffs.add(100);
-        continue;
-      }
-      final resized = img.copyResize(image2, width: 300, height: 300);
-      diffs.add(_calculateDifference(query, resized));
     }
+
+    await Future.wait(List.generate(concurrency, (_) => worker()));
 
     final indices = List<int>.generate(diffs.length, (i) => i)
       ..sort((a, b) => diffs[a].compareTo(diffs[b]));
@@ -367,6 +421,8 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
     setState(() {
       _sortedIndices = indices;
       _sortedDiffs = sortedDiffs;
+      _isSorting = false;
+      _sortProgress = 0.0;
     });
   }
 
@@ -458,10 +514,8 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
 
     await classifyImage(image);
 
-    final decoded = img.decodeImage(await image.readAsBytes());
-    if (decoded != null) {
-      _queryImage = img.copyResize(decoded, width: 300, height: 300);
-    }
+    final bytes = await image.readAsBytes();
+    _queryBytes = bytes;
     _sortedDiffs = null;
     _sortedIndices = null;
   }
@@ -479,10 +533,8 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
 
     await classifyImage(image);
 
-    final decoded = img.decodeImage(await image.readAsBytes());
-    if (decoded != null) {
-      _queryImage = img.copyResize(decoded, width: 300, height: 300);
-    }
+    final bytes = await image.readAsBytes();
+    _queryBytes = bytes;
     _sortedDiffs = null;
     _sortedIndices = null;
   }
@@ -495,6 +547,27 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
         .map((label) => label.trim())
         .where((label) => label.isNotEmpty)
         .toList();
+  }
+
+  Future<Uint8List?> _getImageBytes(String url) async {
+    final cached = _imageCache[url];
+    if (cached != null) {
+      _imageCache.remove(url);
+      _imageCache[url] = cached;
+      return cached;
+    }
+
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+
+    final bytes = response.bodyBytes;
+    _imageCache[url] = bytes;
+    if (_imageCache.length > _imageCacheLimit) {
+      _imageCache.remove(_imageCache.keys.first);
+    }
+    return bytes;
   }
 
   @override
