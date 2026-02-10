@@ -7,11 +7,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
+
+import 'firebase_options.dart';
+import 'classifier.dart';
 
 double _diffFromBytes(Map<String, dynamic> args) {
   final queryBytes = args["query"] as Uint8List?;
@@ -35,9 +36,9 @@ double _diffFromBytes(Map<String, dynamic> args) {
     for (var x = 0; x < width; x++) {
       final pixelA = queryResized.getPixel(x, y);
       final pixelB = targetResized.getPixel(x, y);
-      diff += (img.getRed(pixelA) - img.getRed(pixelB)).abs();
-      diff += (img.getGreen(pixelA) - img.getGreen(pixelB)).abs();
-      diff += (img.getBlue(pixelA) - img.getBlue(pixelB)).abs();
+      diff += (pixelA.r - pixelB.r).abs();
+      diff += (pixelA.g - pixelB.g).abs();
+      diff += (pixelA.b - pixelB.b).abs();
     }
   }
 
@@ -48,7 +49,9 @@ double _diffFromBytes(Map<String, dynamic> args) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const MaterialApp(
     home: MyApp(),
   ));
@@ -67,6 +70,7 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
 
   List<Map<String, dynamic>>? _outputs;
   File? _image;
+  Uint8List? _imageBytes;
   bool _loading = false;
   String _collectionName = "images";
   Uint8List? _queryBytes;
@@ -77,15 +81,13 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
   double _sortProgress = 0.0;
   final LinkedHashMap<String, Uint8List> _imageCache = LinkedHashMap();
   static const int _imageCacheLimit = 30;
+  late final ImageClassifier _classifier;
 
   late final AnimationController _animationController;
   late final Animation<double> _degOneTranslationAnimation;
   late final Animation<double> _degTwoTranslationAnimation;
   late final Animation<double> _degThreeTranslationAnimation;
   late final Animation<double> _rotationAnimation;
-
-  late Interpreter _interpreter;
-  late List<String> _labels;
 
   double getRadiansFromDegree(double degree) {
     const unitRadian = 57.295779513;
@@ -95,6 +97,8 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+
+    _classifier = ImageClassifier();
 
     _animationController = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 250));
@@ -148,12 +152,17 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
                   const SizedBox(
                     height: 100,
                   ),
-                  _image == null
+                  (_image == null && _imageBytes == null)
                       ? Container()
-                      : Image.file(
-                          _image!,
-                          height: 200,
-                        ),
+                      : kIsWeb
+                          ? Image.memory(
+                              _imageBytes!,
+                              height: 200,
+                            )
+                          : Image.file(
+                              _image!,
+                              height: 200,
+                            ),
                   const SizedBox(
                     height: 20,
                   ),
@@ -440,64 +449,34 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
         ),
       ));
 
-  Future<void> classifyImage(File image) async {
-    final bytes = await image.readAsBytes();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return;
-
-    final inputTensor = _interpreter.getInputTensor(0);
-    final inputShape = inputTensor.shape;
-    final inputHeight = inputShape[1];
-    final inputWidth = inputShape[2];
-
-    final resized = img.copyResize(decoded,
-        width: inputWidth, height: inputHeight);
-
-    final inputSize = inputHeight * inputWidth * 3;
-    final input = Float32List(inputSize);
-    var index = 0;
-
-    for (var y = 0; y < inputHeight; y++) {
-      for (var x = 0; x < inputWidth; x++) {
-        final pixel = resized.getPixel(x, y);
-        input[index++] = (img.getRed(pixel) - 127.5) / 127.5;
-        input[index++] = (img.getGreen(pixel) - 127.5) / 127.5;
-        input[index++] = (img.getBlue(pixel) - 127.5) / 127.5;
-      }
-    }
-
-    final outputTensor = _interpreter.getOutputTensor(0);
-    final outputShape = outputTensor.shape;
-    final outputSize = outputShape.reduce((a, b) => a * b);
-    final output = List.filled(outputSize, 0.0).reshape(outputShape);
-
-    _interpreter.run(input.reshape([1, inputHeight, inputWidth, 3]), output);
-
-    final scores = (output[0] as List).cast<double>();
-    var topIndex = 0;
-    var topScore = scores.isNotEmpty ? scores[0] : 0.0;
-
-    for (var i = 1; i < scores.length; i++) {
-      if (scores[i] > topScore) {
-        topScore = scores[i];
-        topIndex = i;
-      }
-    }
-
-    final label = (topIndex < _labels.length)
-        ? _labels[topIndex]
-        : 'unknown';
+  Future<void> classifyImage(Uint8List bytes) async {
+    final result = await _classifier.classify(bytes);
 
     if (!mounted) return;
+
+    if (result == null) {
+      setState(() {
+        _loading = false;
+      });
+      if (_classifier.isSupported == false) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Image classification is not supported on web.'),
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() {
       _loading = false;
       _outputs = [
         {
-          "label": label,
-          "confidence": topScore,
+          "label": result.label,
+          "confidence": result.confidence,
         }
       ];
-      _collectionName = label;
+      _collectionName = result.label;
     });
   }
 
@@ -506,16 +485,24 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
         await ImagePicker().pickImage(source: ImageSource.camera);
     if (picked == null) return;
 
-    final image = File(picked.path);
-    setState(() {
-      _loading = true;
-      _image = image;
-    });
+    try {
+      setState(() {
+        _loading = true;
+      });
+      final bytes = await picked.readAsBytes();
+      _queryBytes = bytes;
+      _imageBytes = bytes;
+      if (!kIsWeb) {
+        _image = File(picked.path);
+      }
+      await classifyImage(bytes);
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+      });
+    }
 
-    await classifyImage(image);
-
-    final bytes = await image.readAsBytes();
-    _queryBytes = bytes;
     _sortedDiffs = null;
     _sortedIndices = null;
   }
@@ -525,28 +512,30 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
         await ImagePicker().pickImage(source: ImageSource.gallery);
     if (picked == null) return;
 
-    final image = File(picked.path);
-    setState(() {
-      _loading = true;
-      _image = image;
-    });
+    try {
+      setState(() {
+        _loading = true;
+      });
+      final bytes = await picked.readAsBytes();
+      _queryBytes = bytes;
+      _imageBytes = bytes;
+      if (!kIsWeb) {
+        _image = File(picked.path);
+      }
+      await classifyImage(bytes);
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+      });
+    }
 
-    await classifyImage(image);
-
-    final bytes = await image.readAsBytes();
-    _queryBytes = bytes;
     _sortedDiffs = null;
     _sortedIndices = null;
   }
 
   Future<void> loadModel() async {
-    _interpreter = await Interpreter.fromAsset('b1_aug.tflite');
-    final labelsData = await rootBundle.loadString('assets/labels.txt');
-    _labels = labelsData
-        .split('\n')
-        .map((label) => label.trim())
-        .where((label) => label.isNotEmpty)
-        .toList();
+    await _classifier.load();
   }
 
   Future<Uint8List?> _getImageBytes(String url) async {
@@ -572,7 +561,9 @@ class _MyAppState extends State<MyApp> with SingleTickerProviderStateMixin {
 
   @override
   void dispose() {
-    _interpreter.close();
+    if (_classifier.isSupported) {
+      _classifier.close();
+    }
     _animationController.dispose();
     super.dispose();
   }
