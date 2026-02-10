@@ -41,5 +41,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+\t<key>NSCameraUsageDescription</key>\n\t<string>Camera access is required to take photos.</string>\n\t<key>NSPhotoLibraryUsageDescription</key>\n\t<string>Photo library access is required to select images.</string>
 </dict>
 </plist>
+

@@ -8,17 +8,17 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:38907484685:android:54abe68102e741781b9344",
+        "mobilesdk_app_id": "1:38907484685:android:7677da4712ae30ee1b9344",
         "android_client_info": {
-          "package_name": "com.example.hello2"
+          "package_name": "com.example.firestore_flutter"
         }
       },
       "oauth_client": [
         {
-          "client_id": "38907484685-6r14gsagps3ij25bkno382m5uhj6ag4p.apps.googleusercontent.com",
+          "client_id": "38907484685-m25m32v64fbp68j28hlla3510m5dui17.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.hello2",
+            "package_name": "com.example.firestore_flutter",
             "certificate_hash": "45c84734d373f325f9d9d69b25a77cbb1274edb5"
           }
         },
@@ -38,6 +38,59 @@
             {
               "client_id": "38907484685-n94qgdl30f8rc16gp0ta7tc8gbpr6ie0.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "38907484685-13ar0eic22oifvlir0ij47c7on37s11n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.theindianappguy.machineLearningFlutterApp",
+                "app_store_id": "123456789"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:38907484685:android:b87ac7870d872ffa1b9344",
+        "android_client_info": {
+          "package_name": "com.example.flutter_auths"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "38907484685-dvvauj07oehbakjphhah24cn7m93dqt1.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.flutter_auths",
+            "certificate_hash": "45c84734d373f325f9d9d69b25a77cbb1274edb5"
+          }
+        },
+        {
+          "client_id": "38907484685-n94qgdl30f8rc16gp0ta7tc8gbpr6ie0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbx9MY5yGPYU2y6TXMibr6ur2P662JkDo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "38907484685-n94qgdl30f8rc16gp0ta7tc8gbpr6ie0.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "38907484685-13ar0eic22oifvlir0ij47c7on37s11n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.theindianappguy.machineLearningFlutterApp",
+                "app_store_id": "123456789"
+              }
             }
           ]
         }
@@ -75,6 +128,14 @@
             {
               "client_id": "38907484685-n94qgdl30f8rc16gp0ta7tc8gbpr6ie0.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "38907484685-13ar0eic22oifvlir0ij47c7on37s11n.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.theindianappguy.machineLearningFlutterApp",
+                "app_store_id": "123456789"
+              }
             }
           ]
         }
