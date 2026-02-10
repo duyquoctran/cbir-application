@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:js_util' as js_util;
 
-import 'classifier_stub.dart';
+import 'domain/models/classification_result.dart';
 
 class ImageClassifier {
   bool get isSupported => true;

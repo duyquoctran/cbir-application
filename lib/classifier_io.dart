@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
-import 'classifier_stub.dart';
+import 'domain/models/classification_result.dart';
 
 class ImageClassifier {
   late final Interpreter _interpreter;

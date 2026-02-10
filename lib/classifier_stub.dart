@@ -1,11 +1,6 @@
 import 'dart:typed_data';
 
-class ClassificationResult {
-  final String label;
-  final double confidence;
-
-  ClassificationResult({required this.label, required this.confidence});
-}
+import 'domain/models/classification_result.dart';
 
 class ImageClassifier {
   bool get isSupported => false;

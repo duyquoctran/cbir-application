@@ -36,6 +36,9 @@ dependencies:
   path_provider: ^2.1.5
   image: ^4.7.2
   tflite_flutter: ^0.12.1
+  flutter_bloc: ^8.1.6
+  equatable: ^2.0.5
+  google_fonts: ^6.2.1
   
 
 dev_dependencies:
